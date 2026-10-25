@@ -35,19 +35,17 @@ function doPost(e) {
     var name = String(body.name || '').trim().slice(0, 80) || 'Без імені';
     var tgId = String(body.tg_id || '').trim();
     var items = Array.isArray(body.items) ? body.items : [];
-    if (!items.length) return json_({ ok: false, error: 'empty' });
-
     var key = tgId ? 'tg:' + tgId : 'name:' + name.toLowerCase();
     var sh = SpreadsheetApp.getActive().getSheetByName(SHEET_ORDERS);
 
-    // прибрати попереднє замовлення цієї людини
-    var last = sh.getLastRow();
-    if (last > 1) {
-      var keys = sh.getRange(2, 10, last - 1, 1).getValues();
-      for (var r = keys.length - 1; r >= 0; r--) {
-        if (keys[r][0] === key) sh.deleteRow(r + 2);
-      }
+    if (body.delete) {
+      var removed = removeByKey_(sh, key);
+      if (tgId && removed) sendMessage_(tgId, '🗑 Ваше замовлення видалено. Щоб зробити нове, натисніть кнопку «Замовити» внизу.');
+      return json_({ ok: true, removed: removed });
     }
+    if (!items.length) return json_({ ok: false, error: 'empty' });
+
+    removeByKey_(sh, key); // попереднє замовлення цієї людини замінюється
 
     var now = Utilities.formatDate(new Date(), TZ, 'dd.MM.yyyy HH:mm');
     var rows = [];
@@ -97,6 +95,17 @@ function summary_() {
   var peopleList = Object.keys(people).map(function (k) { return people[k]; })
     .sort(function (a, b) { return a.name.localeCompare(b.name, 'uk'); });
   return { ok: true, people: peopleList, dishes: dishList, total: grand, updated: new Date().toISOString() };
+}
+
+/** Видаляє всі рядки з цим ключем; повертає кількість видалених. */
+function removeByKey_(sh, key) {
+  var last = sh.getLastRow(), n = 0;
+  if (last < 2) return 0;
+  var keys = sh.getRange(2, 10, last - 1, 1).getValues();
+  for (var r = keys.length - 1; r >= 0; r--) {
+    if (keys[r][0] === key) { sh.deleteRow(r + 2); n++; }
+  }
+  return n;
 }
 
 /** Замовлення однієї людини за ключем (масив рядків аркуша). */

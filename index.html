@@ -70,6 +70,17 @@ li.on{background:var(--cherry-soft)}
 .btn[aria-disabled="true"]{opacity:.45;pointer-events:none}
 .note{color:var(--muted);font-size:13px;margin:10px 0 0}
 .row{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px}
+.mine{margin-top:16px;background:var(--paper);border:1px solid var(--cherry);border-radius:12px;padding:12px}
+.mine h2{font-size:16px;margin:0 0 8px}
+.mine ul{border:0;border-radius:0;background:transparent}
+.mine li{grid-template-columns:2.6em 1fr auto auto;padding:8px 0}
+.mine li:first-child{border-top:0}
+.mine .q{font-weight:700;font-variant-numeric:tabular-nums;white-space:nowrap}
+.mine .q small{font-weight:400;color:var(--muted)}
+.mine .x{width:30px;height:30px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--muted);font:700 16px/1 var(--body);cursor:pointer}
+.mine-foot{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;border-top:1px solid var(--line);padding-top:10px;margin-top:4px}
+.mine-foot strong{font-family:var(--display);font-size:18px}
+.mine .saved{margin-top:10px}
 .saved{background:var(--cherry-soft);border:1px solid var(--line);border-radius:12px;padding:12px;margin-top:14px;font-weight:600}
 .saved small{display:block;font-weight:400;color:var(--muted);margin-top:4px}
 .toast{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(90px + env(safe-area-inset-bottom,0px));background:var(--ink);color:var(--bg);padding:10px 14px;border-radius:10px;font-weight:600;z-index:7}
@@ -107,10 +118,17 @@ html{scroll-behavior:smooth}
   <div id="v-order">
     <label class="f" for="name">Ваше ім'я</label>
     <input type="text" id="name" placeholder="Наприклад, Олена" autocomplete="given-name">
+    <section class="mine" id="mine" hidden>
+      <h2>Моє замовлення</h2>
+      <ul id="mine-list"></ul>
+      <div class="mine-foot">
+        <span>Разом <strong id="mine-total">0,00 €</strong></span>
+        <button class="btn s" id="clear">Видалити замовлення</button>
+      </div>
+      <div id="saved" class="saved" hidden></div>
+    </section>
     <nav class="tabs" id="tabs"></nav>
     <div id="menu"></div>
-    <div id="saved" class="saved" hidden></div>
-    <div id="preview" class="review" hidden></div>
   </div>
 
   <div id="v-sum" hidden>
@@ -217,8 +235,12 @@ update = function(){
   const ready = o.n > 0;
   $('copy').setAttribute('aria-disabled', !ready);
   $('send').setAttribute('aria-disabled', !ready || sending);
-  $('preview').hidden = !ready;
-  $('preview').textContent = ready ? 'Ваше замовлення:\n\n' + o.text : '';
+  $('mine').hidden = !ready && !savedSig;
+  $('mine-list').innerHTML = o.codes.map(c => `<li><span class="code">${c}</span><div class="nm"><span>${ITEMS[c].n}</span></div>
+    <span class="q">×${qty[c]} <small>${eur(ITEMS[c].p*qty[c])}</small></span><button class="x" data-rm="${c}" aria-label="Прибрати: ${ITEMS[c].n}">×</button></li>`).join('')
+    || '<li><div class="nm" style="grid-column:1/-1;color:var(--muted)">Нічого не обрано</div></li>';
+  $('mine-total').textContent = eur(o.sum);
+  $('clear').hidden = !ready && !savedSig;
   if (ready && savedSig && savedSig !== o.text) { $('saved').hidden = true; }
 }
 function plural(n){ const a=n%10,b=n%100; return a===1&&b!==11?'порція':a>=2&&a<=4&&(b<12||b>14)?'порції':'порцій'; }
@@ -231,6 +253,22 @@ async function copyText(t){
 }
 $('copy').addEventListener('click', () => { const o = orderText(); if (o.n) copyText(o.text); });
 $('send').addEventListener('click', sendOrder);
+$('mine-list').addEventListener('click', e => {
+  const b = e.target.closest('button[data-rm]'); if (!b) return;
+  delete qty[b.dataset.rm]; paintRow(b.dataset.rm); update(); save();
+});
+async function clearOrder(){
+  qty = {}; Object.keys(ITEMS).forEach(paintRow); save();
+  if (savedSig && ENDPOINT) {
+    try {
+      const r = await fetch(ENDPOINT, { method:'POST', headers:{'Content-Type':'text/plain;charset=utf-8'}, body: JSON.stringify({ delete: true, name: $('name').value.trim() || 'Без імені', tg_id: tgUser ? String(tgUser.id) : '' }), redirect:'follow' });
+      const j = await r.json(); if (!j.ok) throw new Error();
+      toast('Замовлення видалено');
+    } catch(e) { toast('Не вдалося видалити на сервері. Спробуйте ще раз'); return; }
+  }
+  savedSig = ''; $('saved').hidden = true; update();
+}
+$('clear').addEventListener('click', clearOrder);
 
 // mode switch
 function setMode(sum){
