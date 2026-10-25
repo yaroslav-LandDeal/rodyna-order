@@ -5,7 +5,13 @@
  * POST  {name, tg_id, items:[{code, name, qty, price}]}  → зберігає замовлення
  *       (попереднє замовлення тієї ж людини замінюється)
  * GET   ?summary=1                                       → підсумок у JSON
+ * GET   ?my=<telegram id>                                → збережене замовлення людини
  * GET   без параметрів                                   → перевірка, що працює
+ * POST  від Telegram (webhook)                           → відповіді бота: /start, /order
+ *
+ * Токен бота: Налаштування проєкту → Властивості скрипту → BOT_TOKEN.
+ * Webhook: відкрити в браузері
+ *   https://api.telegram.org/bot<TOKEN>/setWebhook?url=<URL веб-додатка /exec>
  */
 
 var SHEET_ORDERS = 'Замовлення';
@@ -15,6 +21,7 @@ var TZ = 'Europe/Madrid';
 function doGet(e) {
   setup_();
   if (e && e.parameter && e.parameter.summary) return json_(summary_());
+  if (e && e.parameter && e.parameter.my) return json_({ ok: true, order: myOrder_('tg:' + String(e.parameter.my)) });
   return json_({ ok: true, service: 'rodyna-order', time: new Date().toISOString() });
 }
 
@@ -24,6 +31,7 @@ function doPost(e) {
   lock.waitLock(10000);
   try {
     var body = JSON.parse(e.postData.contents || '{}');
+    if (body.update_id) { handleUpdate_(body); return json_({ ok: true }); }
     var name = String(body.name || '').trim().slice(0, 80) || 'Без імені';
     var tgId = String(body.tg_id || '').trim();
     var items = Array.isArray(body.items) ? body.items : [];
@@ -58,7 +66,9 @@ function doPost(e) {
     });
     if (rows.length) sh.getRange(sh.getLastRow() + 1, 1, rows.length, rows[0].length).setValues(rows);
 
-    return json_({ ok: true, saved: rows.length, name: name });
+    var notified = false;
+    if (tgId && rows.length) notified = sendMessage_(tgId, orderText_(name, rows));
+    return json_({ ok: true, saved: rows.length, name: name, notified: notified });
   } catch (err) {
     return json_({ ok: false, error: String(err) });
   } finally {
@@ -87,6 +97,60 @@ function summary_() {
   var peopleList = Object.keys(people).map(function (k) { return people[k]; })
     .sort(function (a, b) { return a.name.localeCompare(b.name, 'uk'); });
   return { ok: true, people: peopleList, dishes: dishList, total: grand, updated: new Date().toISOString() };
+}
+
+/** Замовлення однієї людини за ключем (масив рядків аркуша). */
+function myOrder_(key) {
+  var sh = SpreadsheetApp.getActive().getSheetByName(SHEET_ORDERS);
+  var last = sh.getLastRow();
+  if (last < 2) return [];
+  return sh.getRange(2, 1, last - 1, 10).getValues()
+    .filter(function (r) { return r[9] === key && +r[5] > 0; })
+    .sort(function (a, b) { return +a[8] - +b[8]; })
+    .map(function (r) { return { code: r[3], name: r[4], qty: +r[5], price: +r[6], sum: +r[7], time: r[0], person: r[2] }; });
+}
+
+function eur_(n) { return (Math.round(n * 100) / 100).toFixed(2).replace('.', ',') + ' €'; }
+
+/** Текст замовлення для повідомлення в Telegram (rows = рядки аркуша або об'єкти myOrder_). */
+function orderText_(name, rows) {
+  var total = 0;
+  var lines = rows.map(function (r) {
+    var code = r.code || r[3], dish = r.name || r[4], qty = r.qty || r[5], sum = r.sum != null ? r.sum : r[7];
+    total += +sum;
+    return code + ' ' + dish + ' ×' + qty + ' — ' + eur_(sum);
+  });
+  return '🧾 Ваше замовлення, ' + name + ':\n' + lines.join('\n') + '\nРазом: ' + eur_(total) +
+    '\n\nЗмінити можна в додатку: кнопка «Замовити» внизу. Команда /order покаже поточне замовлення.';
+}
+
+/** Повідомлення від Telegram (webhook). */
+function handleUpdate_(u) {
+  var m = u.message || u.edited_message;
+  if (!m || !m.chat || m.chat.type !== 'private') return;
+  var chatId = String(m.chat.id);
+  var text = String(m.text || '').trim();
+  var from = m.from || {};
+  var name = [from.first_name, from.last_name].filter(Boolean).join(' ') || 'Без імені';
+  if (/^\/start/.test(text)) {
+    sendMessage_(chatId, 'Привіт! Щоб зробити замовлення з «Корчми Родина», натисніть кнопку «Замовити» внизу, оберіть страви й надішліть. Після цього я пришлю сюди ваше замовлення по стравах. Команда /order покаже поточне замовлення.');
+    return;
+  }
+  var order = myOrder_('tg:' + chatId);
+  if (!order.length) { sendMessage_(chatId, 'Замовлення ще немає. Натисніть кнопку «Замовити» внизу, щоб обрати страви.'); return; }
+  sendMessage_(chatId, orderText_(order[0].person || name, order));
+}
+
+function sendMessage_(chatId, text) {
+  var token = PropertiesService.getScriptProperties().getProperty('BOT_TOKEN');
+  if (!token) return false;
+  try {
+    var res = UrlFetchApp.fetch('https://api.telegram.org/bot' + token + '/sendMessage', {
+      method: 'post', contentType: 'application/json', muteHttpExceptions: true,
+      payload: JSON.stringify({ chat_id: chatId, text: text, disable_web_page_preview: true })
+    });
+    return res.getResponseCode() === 200;
+  } catch (err) { return false; }
 }
 
 /** Створює аркуші й формули, якщо їх ще немає. */

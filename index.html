@@ -202,7 +202,7 @@ async function sendOrder(){
     const j = await r.json();
     if (!j.ok) throw new Error(j.error || 'save failed');
     savedSig = o.text;
-    $('saved').innerHTML = `Замовлення збережено ✓<small>${o.n} ${plural(o.n)} на ${eur(o.sum)}. Щоб змінити, виправте вибір і надішліть ще раз.</small>`;
+    $('saved').innerHTML = `Замовлення збережено ✓<small>${o.n} ${plural(o.n)} на ${eur(o.sum)}. ${j.notified ? 'Бот надіслав вам його в особисті повідомлення.' : ''} Щоб змінити, виправте вибір і надішліть ще раз.</small>`;
     $('saved').hidden = false;
     toast('Збережено');
     try { window.Telegram?.WebApp?.HapticFeedback?.notificationOccurred('success'); } catch(e){}
@@ -292,6 +292,16 @@ $('m-sum').addEventListener('click', () => { if (!$('sum').innerHTML) loadSummar
   const nameEl = document.getElementById('name');
   tgUser = u || null;
   if (u && !nameEl.value.trim()) { nameEl.value = [u.first_name, u.last_name].filter(Boolean).join(' '); nameEl.dispatchEvent(new Event('input')); }
+  // відновити збережене замовлення з бекенду, якщо на пристрої немає чернетки
+  if (u && ENDPOINT && !Object.keys(qty).length) {
+    fetch(ENDPOINT + '?my=' + encodeURIComponent(u.id) + '&_=' + Date.now(), { redirect:'follow' }).then(r => r.json()).then(d => {
+      if (!d.ok || !d.order || !d.order.length) return;
+      d.order.forEach(it => { if (ITEMS[it.code]) qty[it.code] = Math.min(20, +it.qty || 0); });
+      Object.keys(ITEMS).forEach(paintRow); update(); save();
+      savedSig = orderText().text;
+      $('saved').innerHTML = 'Це ваше збережене замовлення ✓<small>Можна змінити й надіслати ще раз.</small>'; $('saved').hidden = false;
+    }).catch(() => {});
+  }
 
   const mb = tg.MainButton;
   function syncMain(){
