@@ -40,6 +40,7 @@ function doPost(e) {
 
     if (body.delete) {
       var removed = removeByKey_(sh, key);
+      writeSummary_();
       if (tgId && removed) sendMessage_(tgId, '🗑 Ваше замовлення видалено. Щоб зробити нове, натисніть кнопку «Замовити» внизу.');
       return json_({ ok: true, removed: removed });
     }
@@ -64,6 +65,7 @@ function doPost(e) {
     });
     if (rows.length) sh.getRange(sh.getLastRow() + 1, 1, rows.length, rows[0].length).setValues(rows);
 
+    writeSummary_();
     var notified = false;
     if (tgId && rows.length) notified = sendMessage_(tgId, orderText_(name, rows));
     return json_({ ok: true, saved: rows.length, name: name, notified: notified });
@@ -175,28 +177,46 @@ function setup_() {
     sh.setColumnWidth(5, 320);
     sh.hideColumns(9, 2);
   }
-  var sum = ss.getSheetByName(SHEET_SUMMARY);
-  if (!sum) {
-    sum = ss.insertSheet(SHEET_SUMMARY, 1);
-    sum.getRange('A1').setValue('Разом, €').setFontWeight('bold');
-    sum.getRange('B1').setFormula('=SUM(\'' + SHEET_ORDERS + '\'!H2:H)');
-    sum.getRange('A2').setValue('Учасників').setFontWeight('bold');
-    sum.getRange('B2').setFormula('=COUNTUNIQUE(\'' + SHEET_ORDERS + '\'!J2:J)');
-    sum.getRange('A4').setValue('Замовити в ресторані').setFontWeight('bold');
-    sum.getRange('A5').setFormula(
-      '=IFERROR(QUERY(\'' + SHEET_ORDERS + '\'!D2:I, ' +
-      '"select D, E, sum(F), sum(H) where D is not null group by D, E, I order by I ' +
-      'label D \'Код\', E \'Страва\', sum(F) \'К-сть\', sum(H) \'Сума, €\'", 0), "Замовлень ще немає")');
-    sum.getRange('G4').setValue('Хто скільки платить').setFontWeight('bold');
-    sum.getRange('G5').setFormula(
-      '=IFERROR(QUERY(\'' + SHEET_ORDERS + '\'!C2:H, ' +
-      '"select C, sum(H) where C is not null group by C order by C ' +
-      'label C \'Учасник\', sum(H) \'Сума, €\'", 0), "")');
-    sum.setColumnWidth(2, 320);
+  if (!ss.getSheetByName(SHEET_SUMMARY)) {
+    ss.insertSheet(SHEET_SUMMARY, 1);
+    writeSummary_();
     var def = ss.getSheets()[0];
     if (def.getName() !== SHEET_ORDERS && def.getName() !== SHEET_SUMMARY && ss.getSheets().length > 2
         && def.getLastRow() === 0) ss.deleteSheet(def);
   }
+}
+
+/** Перезаписує аркуш «Підсумок» значеннями (без формул, щоб не залежати від локалі). */
+function writeSummary_() {
+  var ss = SpreadsheetApp.getActive();
+  var sum = ss.getSheetByName(SHEET_SUMMARY);
+  if (!sum) return;
+  var d = summary_();
+  sum.clearContents();
+  var rows = [
+    ['Разом, €', d.total],
+    ['Учасників', d.people.length],
+    ['Оновлено', Utilities.formatDate(new Date(), TZ, 'dd.MM.yyyy HH:mm')],
+    [],
+    ['Замовити в ресторані'],
+    ['Код', 'Страва', 'К-сть', 'Сума, €']
+  ];
+  d.dishes.forEach(function (x) { rows.push([x.code, x.name, x.qty, x.sum]); });
+  if (!d.dishes.length) rows.push(['Замовлень ще немає']);
+  rows.push([]);
+  rows.push(['Хто скільки платить']);
+  rows.push(['Учасник', 'Сума, €', 'Надіслано']);
+  d.people.forEach(function (p) { rows.push([p.name, p.sum, p.time]); });
+  var width = 4;
+  rows = rows.map(function (r) { while (r.length < width) r.push(''); return r; });
+  sum.getRange(1, 1, rows.length, width).setValues(rows);
+  sum.getRange(1, 1, 3, 1).setFontWeight('bold');
+  sum.getRange(5, 1).setFontWeight('bold');
+  sum.getRange(6, 1, 1, 4).setFontWeight('bold');
+  var pRow = 6 + Math.max(d.dishes.length, 1) + 2;
+  sum.getRange(pRow, 1).setFontWeight('bold');
+  sum.getRange(pRow + 1, 1, 1, 3).setFontWeight('bold');
+  sum.setColumnWidth(1, 160); sum.setColumnWidth(2, 320);
 }
 
 function json_(obj) {
